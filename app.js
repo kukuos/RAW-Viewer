@@ -290,7 +290,9 @@ async function decodeFile(file, engineKey, extraParams = {}) {
 // ===================================================================
 // 渲染管线(src -> 显示)
 // ===================================================================
-const EXP_LUT = new Float32Array(4096);   // 曝光/亮度:输入 v/65535*255 -> 输出
+const EXP_LUT = new Float32Array(4097);   // 曝光/亮度:输入 v/65535*255 -> 输出
+// 注意:索引按 (v/255*4096)|0 计算,v=255 时索引为 4096,因此数组需 4097 项,
+// 否则最亮像素取到 undefined,经 |0 变成 0,高光区会显示成绿色光斑。
 const TONE_LUT = new Float32Array(256);
 const CONTRAST_LUT = new Float32Array(256);
 let lutState = { ev: null, br: null, hi: null, sh: null, ct: null };
@@ -300,7 +302,7 @@ function rebuildLuts(opts) {
   const hiAmt = hi / 100, shAmt = sh / 100;
   const gain = Math.pow(2, ev) * br;
   if (ev !== lutState.ev || br !== lutState.br) {
-    for (let i = 0; i < 4096; i++) {
+    for (let i = 0; i < 4097; i++) {
       let v = (i / 4096 * 255) * gain;
       v = clamp(v, 0, 255);
       EXP_LUT[i] = v;
