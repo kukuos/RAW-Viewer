@@ -641,7 +641,9 @@ async function openFile(file, engineKey) {
     fileInfoEl.textContent = `${file.name} · ${fmtBytes(file.size)} · ${cur.w}×${cur.h}`;
     if (cur.linearDng) fileInfoEl.textContent += ' · 内嵌全尺寸 JPEG';
     setBadge('就绪', 'ok');
-    setView('zoom');
+    // 调整功能使用频率高:打开后自动展开「调整」面板
+    if (val('panelAdj').style.display === 'none') togglePanel('panelAdj', 'btnAdj');
+    setView('fit');   // 打开后默认适应窗口,不进入放大查看
   } catch (e) {
     console.error(e);
     setBadge('解码失败: ' + (e && e.message || e), 'err');
@@ -881,6 +883,19 @@ btn('btnThumb').addEventListener('click', async () => {
     setBadge('预览图读取失败: ' + (e.message || e), 'warn');
   } finally { setBusy(false); }
 });
+
+// 白天 / 黑夜主题切换(默认白天,持久化到 localStorage)
+const THEME_LS = 'rawviewer-theme';
+function applyTheme(mode) {
+  document.documentElement.dataset.theme = mode;
+  const btn = val('btnTheme');
+  if (mode === 'dark') { btn.textContent = '☀️'; btn.title = '切换到白天外观'; }
+  else                { btn.textContent = '🌙'; btn.title = '切换到黑夜外观'; }
+  try { localStorage.setItem(THEME_LS, mode); } catch (_) {}
+}
+val('btnTheme').addEventListener('click', () =>
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+try { applyTheme(localStorage.getItem(THEME_LS) === 'dark' ? 'dark' : 'light'); } catch (_) { applyTheme('light'); }
 
 // 初始化
 setView('none');
