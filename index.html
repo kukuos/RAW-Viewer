@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAW 文件查看助手</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --bg2: #15181f;
+    --panel: #181c24;
+    --panel2: #1e2330;
+    --border: #262d3a;
+    --text: #dbe0ea;
+    --dim: #8b95a5;
+    --faint: #626c7e;
+    --accent: #4e9bff;
+    --accent2: #2f7bf5;
+    --on-accent: #0b1526;
+    --green: #42d392;
+    --amber: #e5b25c;
+    --red: #ff6262;
+    --radius: 10px;
+    --radius-sm: 7px;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- 顶部工具栏 ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+  .brand .dot { width: 10px; height: 10px; border-radius: 3px; background: linear-gradient(135deg,#ff5f6d,#4e9bff); }
+  .brand small { color: var(--faint); font-weight: 400; }
+
+  .sep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; }
+
+  button {
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent2); border-color: var(--accent2); color: var(--on-accent); }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); color: var(--on-accent); }
+  button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+  button.active { background: var(--accent2); color: var(--on-accent); border-color: var(--accent2); }
+  button.active:hover { color: var(--on-accent); }
+
+  #kvtab { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  #kvtab td { padding: 3.5px 0; vertical-align: top; font-size: 12.5px; }
+  #kvtab td:first-child { color: var(--dim); width: 88px; }
+  #kvtab td:last-child { font-family: var(--mono); font-size: 12px; color: var(--text); word-break: break-word; }
+
+  input[type="file"] { display: none; }
+
+  /* 状态徽标 */
+  .status-badge {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--dim);
+    display: none;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .status-badge.show { display: inline-flex; }
+  .status-badge.warn { color: var(--text); border-color: transparent; background: rgba(229,178,92,.15); }
+  .status-badge.err  { color: var(--red);   border-color: transparent; background: rgba(255,98,98,.12); }
+  .status-badge.ok   { color: var(--green); border-color: transparent; background: rgba(66,211,146,.12); }
+  .spinner {
+    width: 12px; height: 12px;
+    border: 2px solid var(--faint);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    flex: 0 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .engines { display: flex; gap: 4px; }
+  .engines .badge {
+    font-size: 11px; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+  }
+  .engines .badge.on { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- 主区 ---------- */
+  main {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+  }
+  #content {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    min-width: 0;
+    position: relative;
+    background:
+      radial-gradient(circle at 50% 40%, rgba(78,155,255,.06), transparent 55%),
+      var(--bg);
+  }
+  #canvas { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 6px 30px rgba(0,0,0,.45); }
+  .hint {
+    text-align: center; color: var(--dim); max-width: 560px; line-height: 1.8;
+  }
+  .hint .big { display: block; font-size: 30px; margin-bottom: 10px; }
+  .hint b { color: var(--text); }
+  .drop { border-color: var(--accent) !important; background: rgba(78,155,255,.06) !important; }
+
+  #progress {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    background: rgba(20,22,28,.92);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 26px 34px;
+    text-align: center;
+    display: none;
+    z-index: 5;
+    min-width: 280px;
+  }
+  #progress.show { display: block; }
+  #progress .spinner { width: 34px; height: 34px; border-width: 3px; margin: 0 auto 16px; }
+  #progress .msg { font-weight: 600; margin-bottom: 4px; }
+  #progress .sub { color: var(--dim); font-size: 12px; }
+  #bar { height: 4px; background: var(--panel2); border-radius: 4px; margin-top: 14px; overflow: hidden; }
+  #barFill { height: 100%; width: 0; background: linear-gradient(90deg,#2f7bf5,#4e9bff); transition: width .25s; }
+
+  /* ---------- 侧栏 ---------- */
+  aside {
+    flex: 0 0 328px;
+    min-width: 310px;
+    max-width: 480px;
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: none;
+    flex-direction: column;
+    min-height: 0;
+    padding: 12px 14px;
+    gap: 12px;
+    overflow-y: auto;
+  }
+  aside.open { display: flex; }
+  h3 {
+    margin: 0; font-size: 12px; color: var(--faint);
+    letter-spacing: .12em; text-transform: uppercase; font-weight: 600;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+
+  /* 元数据网格 */
+  #kvt {
+    width: 100%; border-collapse: collapse; table-layout: fixed;
+  }
+  #kvt td { padding: 3.5px 0; vertical-align: top; font-size: 12.5px; }
+  #kvt td:first-child { color: var(--dim); width: 86px; }
+  #kvt td:last-child {
+    font-family: var(--mono); font-size: 12px; color: var(--text);
+    word-break: break-word;
+  }
+  .kv-block { margin-bottom: 12px; }
+  .kv-block:last-child { margin-bottom: 0; }
+  .kv-block h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+
+  /* 曝光调节 */
+  .ctrl { margin-bottom: 10px; }
+  .ctrl:last-child { margin-bottom: 0; }
+  .ctrl .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }
+  .ctrl label { font-size: 12.5px; color: var(--dim); }
+  .ctrl .val { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  input[type="range"] {
+    width: 100%; margin: 6px 0 0; accent-color: var(--accent); height: 4px; cursor: pointer;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--dim);
+    cursor: pointer; user-select: none;
+  }
+  .chip.on { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+  .chip.ghost:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* 直方图 */
+  #hist {
+    width: 100%; height: 90px; display: block;
+    background: linear-gradient(#1c2130 0 0); background-size: 100% 100%;
+  }
+  .hist-legend { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: var(--faint); }
+
+  /* 缩放 */
+  .zoom-row { display: flex; align-items: center; gap: 8px; }
+  .zoom-row button { padding: 4px 10px; font-size: 13px; }
+  .zoom-row .zval { font-family: var(--mono); font-size: 12px; min-width: 52px; text-align: center; color: var(--accent); }
+  .zoom-pos { font-size: 11px; color: var(--faint); font-family: var(--mono); text-align: center; margin-top: 6px; }
+
+  /* 直方图通道切换 */
+  .chan-row { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; }
+  .chan { font-size: 11px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--dim); cursor: pointer; }
+  .chan.on { color: var(--on-accent); }
+  .chan.r.on { background: #e5484d; border-color: #e5484d; }
+  .chan.g.on { background: #30a46c; border-color: #30a46c; }
+  .chan.b.on { background: #3e63dd; border-color: #3e63dd; }
+  .chan.l.on { background: #8b95a5; border-color: #8b95a5; color: #111; }
+
+  /* 像素拾取 */
+  #pixel {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);
+    font-size: 12px; color: var(--dim);
+  }
+  #pixel b { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+
+  /* 底部状态条 */
+  #statusbar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 16px;
+    padding: 6px 14px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--dim);
+  }
+  #statusbar .sp { color: var(--faint); }
+  #coords { font-family: var(--mono); }
+
+  /* 缩放画布容器 */
+  #iv {
+    position: absolute; inset: 0;
+    overflow: hidden; border-radius: 4px;
+    box-shadow: 0 6px 30px rgba(0,0,0,.45);
+    background: #0a0c10;
+    display: none;
+  }
+  #ivcanvas { position: absolute; left: 0; top: 0; display: block; cursor: grab; }
+  #ivcanvas.dragging { cursor: grabbing; }
+  #canvas {
+    display: block;
+    width: 100%; height: 100%;
+  }
+  .iv-holder {
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    width: 100%; height: 100%; min-height: 0;
+  }
+
+  /* 移动端 */
+  @media (max-width: 860px) {
+    main { flex-direction: column-reverse; }
+    aside {
+      flex: 0 1 auto; max-width: none; border-left: none; border-top: 1px solid var(--border);
+      max-height: 46vh; min-width: 0;
+    }
+  }
+
+  /* “正在解码”时的引擎徽标高亮 */
+  .engines .badge.busy { color: var(--amber); border-color: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span>RAW 文件查看助手 <small>LibRaw-WASM</small></div>
+
+  <button id="btnOpen" title="选择 RAW 文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14" opacity=".55"/></svg>打开 RAW…</button>
+  <input type="file" id="file" accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
+
+  <button id="btnZoomIn" title="放大 (Ctrl++)">＋</button>
+  <button id="btnZoomOut" title="缩小 (Ctrl+-)">－</button>
+  <button id="btnFit" title="适应窗口 (Ctrl+0)">适应</button>
+  <button id="btn100" title="100% 显示 (Ctrl+1)">100%</button>
+
+  <span class="sep"></span>
+
+  <button id="btnHist" title="直方图">📊 直方图</button>
+  <button id="btnMeta" title="元数据">ℹ 信息</button>
+  <button id="btnMap" title="拍摄位置">🗺 位置</button>
+  <button id="btnAdj" title="渲染调整">🎚 调整</button>
+  <button id="btnZoomView" title="缩放平移">🔍 放大查看</button>
+
+  <span class="sep"></span>
+  <button id="btnExport" title="导出当前渲染参数的 JPEG">⬇ 导出</button>
+  <button id="btnThumb" title="提取内嵌预览图">🖼 预览图</button>
+
+  <div class="engines" id="engines">
+    <span class="badge on" data-eng="1">标准</span>
+    <span class="badge" data-eng="2">高质量</span>
+    <span class="badge" data-eng="3">快速</span>
+  </div>
+
+  <span id="badge" class="status-badge">…</span>
+  <div id="busy" class="status-badge"><span class="spinner"></span>解码中…</div>
+</header>
+
+<main>
+  <div id="content">
+    <div class="iv-holder" id="holder">
+      <canvas id="canvas"></canvas>
+      <div id="iv" style="display:none;z-index:2">
+        <canvas id="ivcanvas"></canvas>
+      </div>
+      <div class="hint" id="hint">
+        <span class="big">📷</span>
+        点击 <b>「打开 RAW…」</b> 或将 RAW 文件<b>拖入此窗口</b><br>
+        支持 CR2 / CR3 / NEF / ARW / RAF / RW2 / ORF / PEF / DNG 等常见格式<br>
+        <span style="color:var(--faint);font-size:12px">全部处理在本地浏览器内完成,不会上传任何数据</span>
+      </div>
+    </div>
+    <div id="progress">
+      <div class="spinner"></div>
+      <div class="msg" id="pMsg">正在解析 RAW 文件…</div>
+      <div class="sub" id="pSub"></div>
+      <div id="bar"><div id="barFill"></div></div>
+    </div>
+  </div>
+
+  <aside id="side">
+      <div id="panelHist" class="panel" style="display:none">
+        <canvas id="hist" width="300" height="90"></canvas>
+        <div class="hist-legend"><span>0</span><span>255</span></div>
+        <div class="chan-row" id="chanRow">
+          <span class="chan l on" data-c="l">明亮度</span>
+          <span class="chan r" data-c="r">R</span>
+          <span class="chan g" data-c="g">G</span>
+          <span class="chan b" data-c="b">B</span>
+        </div>
+      </div>
+      <div id="panelMeta" class="panel" style="display:none"></div>
+      <div id="panelMap" class="panel" style="display:none"></div>
+      <div id="panelAdj" style="display:none">
+      <h3>渲染调整</h3>
+      <div class="ctrl">
+        <div class="row"><label>曝光</label><span class="val" id="vEv">0.0 EV</span></div>
+        <input type="range" id="sEv" min="-3" max="3" step="0.1" value="0">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>亮度</label><span class="val" id="vBr">1.00</span></div>
+        <input type="range" id="sBr" min="0.2" max="4" step="0.05" value="1">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>对比度</label><span class="val" id="vCt">0</span></div>
+        <input type="range" id="sCt" min="-100" max="100" step="1" value="0">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>饱和度</label><span class="val" id="vSat">100%</span></div>
+        <input type="range" id="sSat" min="0" max="200" step="1" value="100">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>高光</label><span class="val" id="vHi">0</span></div>
+        <input type="range" id="sHi" min="-100" max="100" step="1" value="0">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>阴影</label><span class="val" id="vSh">0</span></div>
+        <input type="range" id="sSh" min="-100" max="100" step="1" value="0">
+      </div>
+      <div class="ctrl">
+        <div class="row"><label>白平衡</label><span class="val" id="vWb">相机</span></div>
+        <div class="chips" id="wbChips">
+          <span class="chip on" data-wb="camera">相机</span>
+          <span class="chip" data-wb="auto">自动</span>
+          <span class="chip" data-wb="daylight">日光</span>
+          <span class="chip" data-wb="cloudy">阴天</span>
+          <span class="chip" data-wb="shade">阴影</span>
+          <span class="chip" data-wb="flash">闪光灯</span>
+          <span class="chip" data-wb="tungsten">钨丝灯</span>
+          <span class="chip" data-wb="fluorescent">荧光灯</span>
+          <span class="chip" data-wb="custom">自定义</span>
+        </div>
+        <div class="wb-row" id="wbCustomRow" style="display:none;margin-top:8px">
+          <div class="ctrl">
+            <div class="row"><label>R 增益</label><span class="val" id="vWbR">1.00</span></div>
+            <input type="range" id="sWbR" min="0.4" max="2.5" step="0.01" value="1">
+          </div>
+          <div class="ctrl">
+            <div class="row"><label>G 增益</label><span class="val" id="vWbG">1.00</span></div>
+            <input type="range" id="sWbG" min="0.4" max="2.5" step="0.01" value="1">
+          </div>
+          <div class="ctrl">
+            <div class="row"><label>B 增益</label><span class="val" id="vWbB">1.00</span></div>
+            <input type="range" id="sWbB" min="0.4" max="2.5" step="0.01" value="1">
+          </div>
+        </div>
+      </div>
+      <div id="pixel" style="display:none"></div>
+      </div>
+      </aside>
+</main>
+
+<footer id="statusbar">
+  <span id="fileInfo"></span>
+  <span class="sp">·</span>
+  <span id="zoomInfo">100%</span>
+  <span class="sp">·</span>
+  <span id="coords"></span>
+  <span style="flex:1"></span>
+  <span id="renderTime"></span>
+</footer>
+
+</body>
+</html>
+<script type="module" src="app.js"></script>
