@@ -53,7 +53,6 @@ let queue = 0;
 // 批量导入的照片列表
 let photoList = [];        // [{ file, doc, thumbUrl }]
 let currentIdx = -1;       // 当前选中下标
-let exportQueue = [];      // 批量导出任务队列
 let exporting = false;
 
 // 渲染缓存
@@ -619,25 +618,21 @@ function togglePanel(id, btnId) {
 // ---------- 批量导入与导出 ----------
 const thumbsEl = val('thumbs');
 
-// 缩略图使用内嵌预览(优先),没有则用解码结果生成小图
+// 缩略图统一从已解码的全分辨率像素 doc.src 生成,
+// 保证清晰(不依赖可能很小或过度压缩的内嵌预览)。
+// 生成分辨率按缩略图显示框(约 196×88)的 2 倍,避免被拉大后发糊。
 async function makeThumb(entry) {
-  try {
-    const t = entry.doc && entry.doc.raw ? await entry.doc.raw.thumbnailData() : null;
-    if (t && t.data && t.data.length) {
-      const type = t.format === 'jpeg' ? 'image/jpeg' : 'image/png';
-      return URL.createObjectURL(new Blob([t.data], { type }));
-    }
-  } catch (_) {}
   try {
     const c = document.createElement('canvas');
     const w = entry.doc.w, h = entry.doc.h;
-    const scale = 96 / Math.max(w, h);
+    const cw = 392, ch = 176;            // 目标显示框的约 2 倍
+    const scale = Math.max(cw / w, ch / h);   // cover 语义:填满框,多余部分由 CSS 裁切
     c.width = Math.max(1, Math.round(w * scale));
     c.height = Math.max(1, Math.round(h * scale));
     const ctx = c.getContext('2d');
     const img = new ImageData(new Uint8ClampedArray(entry.doc.src.buffer, 0, w * h * 4), w, h);
     ctx.putImageData(img, 0, 0);
-    return c.toDataURL('image/jpeg', 0.7);
+    return c.toDataURL('image/jpeg', 0.82);
   } catch (_) {
     return '';
   }
@@ -649,7 +644,7 @@ function updateThumbBar() {
     const el = document.createElement('button');
     el.className = 'thumb' + (i === currentIdx ? ' on' : '');
     el.title = entry.file.name;
-    el.innerHTML = `<img alt="" src="${entry.thumbUrl}"><span class="filename"></span><span class="mark">✓</span>`;
+    el.innerHTML = `<img alt="" src="${entry.thumbUrl}"><span class="filename"></span>`;
     el.querySelector('.filename').textContent = entry.file.name;
     el.addEventListener('click', () => {
       if (i === currentIdx) return;
@@ -666,7 +661,7 @@ function updateThumbBar() {
     el.appendChild(rm);
     thumbsEl.appendChild(el);
   });
-  val('btnExportAll').disabled = photoList.length === 0;
+  val('menuExportAll').disabled = photoList.length === 0;
 }
 
 function setActivePhoto(idx) {
@@ -761,71 +756,158 @@ function removePhoto(i) {
   updateThumbBar();
 }
 
-// 导出当前渲染结果
-function exportCanvasToJpeg(canvas, name) {
-  canvas.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  }, 'image/jpeg', 0.92);
+// ---------- 导出(单张 / 全部打 ZIP 包) ----------
+// 所有 JPEG 渲染使用与屏幕一致的调整参数(含自定义白平衡增益)。
+
+// 把 canvas 编码为 JPEG Blob
+function canvasToJpegBlob(c) {
+  return new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
 }
 
-// 以某张照片为基础渲染离屏画布(复用当前调整参数,仅供批量导出)
+// 单张导出:导出为 JPEG 并触发浏览器下载
+async function exportCurrent() {
+  if (!renderCanvas) return;
+  setBadge('导出中…', '');
+  try {
+    const blob = await canvasToJpegBlob(renderCanvas);
+    if (!blob) throw new Error('JPEG 编码失败');
+    downloadBlob(blob, ((curFile && curFile.name || 'raw').replace(/\.[^.]+$/, '')) + '.jpg');
+    setBadge('已导出当前照片', 'ok');
+  } catch (e) {
+    setBadge('导出失败: ' + (e.message || e), 'err');
+  }
+}
+
+// 触发浏览器下载一个 Blob
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// 以某张照片为基础渲染离屏画布(复用当前调整参数,仅供导出)
 function renderForExport(doc, opts) {
   const c = document.createElement('canvas');
   c.width = doc.w; c.height = doc.h;
   const ctx = c.getContext('2d');
   const W = doc.w, H = doc.h;
   const out = new Uint8Array(W * H * 4);
-  // renderFrame 支持覆盖通道增益(自定义白平衡实时调整),供批量导出应用
+  // renderFrame 支持覆盖通道增益(自定义白平衡实时调整),供导出应用
   renderFrame(doc, opts, out, opts._gains);
   ctx.putImageData(new ImageData(new Uint8ClampedArray(out.buffer, 0, out.length), W, H), 0, 0);
   return c;
 }
 
-// 批量导出已选照片(默认全部;未选中时取全部)
-function exportAll() {
+// 把每张照片导出为 JPEG 并打包成 ZIP 下载
+async function exportAllZip() {
   if (!photoList.length) return;
-  if (exportQueue.length) return;   // 已在进行
+  if (exporting) return;   // 已在进行
+  exporting = true;
   // 当前“调整”面板参数将应用于所有照片
   const curOpts = { ...readSliders() };
   curOpts._gains = { ...channelGains };
-  exportQueue = photoList.map((e, i) => ({ i, e, opts: curOpts }));
-  exporting = true;
   const pill = document.createElement('span');
   pill.className = 'progress-pill show';
   pill.id = 'batchPill';
   pill.textContent = '导出中…';
   document.querySelector('header').appendChild(pill);
-  pumpExport();
+  setBusy(true, '正在导出全部照片…', '');
+  const jpegs = [];   // { name, blob }
+  try {
+    for (let i = 0; i < photoList.length; i++) {
+      const e = photoList[i];
+      pill.textContent = `导出中 ${i + 1}/${photoList.length}`;
+      setBusy(true, `正在导出 ${i + 1}/${photoList.length}…`, e.file.name);
+      // 每张之间让出主线程,避免界面卡顿
+      await new Promise(r => setTimeout(r, 30));
+      const c = renderForExport(e.doc, curOpts);
+      const blob = await canvasToJpegBlob(c);
+      c.width = 0; c.height = 0;
+      if (!blob) throw new Error('JPEG 编码失败: ' + e.file.name);
+      jpegs.push({ name: e.file.name.replace(/\.[^.]+$/, '') + '.jpg', blob });
+    }
+    const zip = await buildZip(jpegs);
+    if (!zip) throw new Error('ZIP 打包失败');
+    downloadBlob(zip, 'RAW 导出.zip');
+    pill.textContent = '完成 ' + jpegs.length + ' 张';
+    setBadge('已导出 ' + jpegs.length + ' 张', 'ok');
+    setTimeout(() => pill.remove(), 2000);
+  } catch (err) {
+    console.error('批量导出失败', err);
+    pill.remove();
+    setBadge('导出失败: ' + (err && err.message || err), 'err');
+  } finally {
+    exporting = false;
+    setBusy(false);
+  }
 }
 
-function pumpExport() {
-  if (!exportQueue.length) {
-    exporting = false;
-    const pill = val('batchPill');
-    if (pill) { pill.textContent = '完成 ' + (photoList.length || 0) + ' 张'; setTimeout(() => pill.remove(), 2000); }
-    return;
-  }
-  const { i, e, opts } = exportQueue.shift();
-  setBusy(true, `正在导出 ${photoList.length - exportQueue.length}/${photoList.length}…`, e.file.name);
-  const pill = val('batchPill');
-  if (pill) pill.textContent = `导出中 ${photoList.length - exportQueue.length}/${photoList.length}`;
-  // 每个任务等待一帧,避免一次性画大量画布导致界面卡死
-  setTimeout(() => {
-    try {
-      const c = renderForExport(e.doc, opts);
-      const base = e.file.name.replace(/\.[^.]+$/, '');
-      exportCanvasToJpeg(c, base + '.jpg');
-      c.width = 0; c.height = 0;
-    } catch (err) {
-      console.error('导出失败', e.file.name, err);
-      setBadge('导出失败: ' + (err && err.message || err), 'err');
+// 把所有 JPEG 打包为一个 ZIP 压缩包(用 Canvas 得到的 Blob 构建,不依赖第三方库)
+async function buildZip(files) {
+  const encoder = new TextEncoder();
+  // 经典 CRC-32
+  const crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
     }
-    pumpExport();
-  }, 60);
+    return t;
+  })();
+  const crc32 = (buf, start, len) => {
+    let c = 0xffffffff;
+    for (let i = start; i < start + len; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const u16 = (arr, o, v) => { arr[o] = v & 255; arr[o + 1] = (v >>> 8) & 255; };
+  const u32 = (arr, o, v) => { arr[o] = v & 255; arr[o + 1] = (v >>> 8) & 255; arr[o + 2] = (v >>> 16) & 255; arr[o + 3] = (v >>> 24) & 255; };
+
+  const parts = [];
+  let offset = 0;
+  const central = [];
+  for (const f of files) {
+    const name = encoder.encode(f.name);
+    const data = new Uint8Array(await f.blob.arrayBuffer());
+    const crc = crc32(data, 0, data.length);
+
+    const lh = new Uint8Array(30 + name.length);   // 本地文件头
+    u32(lh, 0, 0x04034b50);
+    u16(lh, 4, 20);            // 版本
+    u16(lh, 6, 0x0800);        // 通用标志:UTF-8 文件名
+    u16(lh, 8, 0);             // 压缩方法:存储(不压缩)
+    u32(lh, 14, crc);
+    u32(lh, 18, data.length);  // 压缩后大小
+    u32(lh, 22, data.length);  // 未压缩大小
+    u16(lh, 26, name.length);
+    lh.set(name, 30);
+    parts.push(lh, data);
+
+    const ch = new Uint8Array(46 + name.length);   // 中央目录记录
+    u32(ch, 0, 0x02014b50);
+    u16(ch, 4, 20); u16(ch, 6, 20);
+    u16(ch, 8, 0x0800);
+    u16(ch, 10, 0);
+    u32(ch, 16, crc);
+    u32(ch, 20, data.length);
+    u32(ch, 24, data.length);
+    u16(ch, 28, name.length);
+    u32(ch, 42, offset);
+    ch.set(name, 46);
+    central.push(ch);
+    offset += 30 + name.length + data.length;
+  }
+  // 中央目录结束记录
+  const eocd = new Uint8Array(22);
+  u32(eocd, 0, 0x06054b50);
+  u16(eocd, 8, central.length);
+  u16(eocd, 10, central.length);
+  u32(eocd, 12, central.reduce((a, c) => a + c.length, 0));
+  u32(eocd, 16, offset);
+  parts.push(central, eocd);
+  return new Blob(parts, { type: 'application/zip' });
 }
 
 // ---------- 打开文件(单图/批量) ----------
@@ -1057,14 +1139,29 @@ function highlightEngine(key) {
     b.classList.toggle('on', b.dataset.eng === String(key)));
 }
 
-// 导出
-btn('btnExport').addEventListener('click', () => {
-  if (!renderCanvas) return;
-  exportCanvasToJpeg(renderCanvas, ((curFile && curFile.name || 'raw').replace(/\.[^.]+$/, '')) + '.jpg');
+// 导出:下拉菜单(导出当前照片 / 导出全部照片为 ZIP)
+const exportMenu = val('exportMenu');
+btn('btnExportMenu').addEventListener('click', e => {
+  e.stopPropagation();
+  const open = exportMenu.style.display === 'block';
+  exportMenu.style.display = open ? 'none' : 'block';
 });
-
-// 批量导出
-btn('btnExportAll').addEventListener('click', () => exportAll());
+// 点击外部关闭菜单
+window.addEventListener('click', e => {
+  if (!e.target.closest('#exportMenuWrap')) exportMenu.style.display = 'none';
+});
+// Esc 关闭菜单
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') exportMenu.style.display = 'none';
+});
+val('menuExportOne').addEventListener('click', () => {
+  exportMenu.style.display = 'none';
+  exportCurrent();
+});
+val('menuExportAll').addEventListener('click', () => {
+  exportMenu.style.display = 'none';
+  exportAllZip();
+});
 
 // 内嵌预览图
 let thumbCache = null;   // 缓存 {data, format},避免同一实例重复解包

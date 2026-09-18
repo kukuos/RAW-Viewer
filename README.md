@@ -2,7 +2,7 @@
 
 一个完全在浏览器本地的相机 RAW 照片查看助手。打开、解码、渲染、调整、导出,全程不离开浏览器,数据不会上传到任何服务器。
 
-底层由 [LibRaw-Wasm](https://github.com/ybouane/LibRaw-Wasm) (v1.6.0, Apache-2.0) 提供解码能力 —— LibRaw 通过 Emscripten 编译为 WebAssembly,在 Web Worker 中并行运行,不阻塞界面。
+底层由 <a href="https://github.com/ybouane/LibRaw-Wasm" target="_blank" rel="noopener">LibRaw-Wasm</a> (v1.6.0, Apache-2.0) 提供解码能力 —— LibRaw 通过 Emscripten 编译为 WebAssembly,在 Web Worker 中并行运行,不阻塞界面。
 
 ## 快速开始
 
@@ -13,21 +13,21 @@ cd raw-viewer
 python -m http.server 3025
 ```
 
-然后浏览器打开 http://127.0.0.1:3025/index.html
+然后浏览器打开 <a href="http://127.0.0.1:3025/index.html" target="_blank" rel="noopener">http://127.0.0.1:3025/index.html</a>
 
 > Windows 下端口如被占用,换一个端口如 `3026` 即可。
 
 ## 使用方式
 
 1. 点击工具栏 **「打开 RAW…」** 选择文件(支持多选),或直接把 RAW 文件拖进窗口;
-2. 照片在本地解码并渲染(首次解码约 0.3–1s,取决于文件大小与质量档位);多张导入后底部出现缩略图栏,点击缩略图即可在照片间切换(无需新开标签页),每张可单独调整;
-3. 查看/编辑完成后,用 **「⬇ 导出」** 把当前渲染结果存成 JPEG;需要一次导出所有已导入照片时,用 **「⬇ 批量导出」**。
+2. 照片在本地解码并渲染(首次解码约 0.3–1s,取决于文件大小与质量档位)。界面为三列布局:左侧列出已导入照片(点击缩略图即切换,无需新开标签页,悬停可移除单张),中间显示当前大图,右侧为信息/调整面板;
+3. 查看/编辑完成后,用 **「⬇ 导出」** 下拉菜单:导出当前照片为 JPEG,或把所有已导入照片按当前调整参数统一导出为一个 **ZIP 压缩包**。
 
 ## 功能
 
 **打开与解码**
 - 支持的格式:CR2 / CR3 / NEF / ARW / RAF / RW2 / ORF / PEF / DNG 以及 LibRaw 支持的其他常见 RAW(dcraw 格式清单)
-- 批量导入:一次可多选/拖入多张 RAW;底部缩略图栏点击即可切换当前照片,悬停可移除单张,「＋ 追加」可在当前列表继续添加文件
+- 批量导入:一次可多选/拖入多张 RAW;左侧缩略图列点击即可切换当前照片,悬停可移除单张,「＋ 追加照片」可在当前列表继续添加文件
 - 三档解码质量,可随时切换,切换即重新解码:
   | 档位 | 说明 |
   |---|---|
@@ -51,7 +51,7 @@ python -m http.server 3025
 
 **导出与预览**
 - 导出:把当前渲染参数(曝光、白平衡、色调等)套用到全尺寸图并导出为 JPEG
-- 批量导出:所有已导入照片按当前调整参数统一导出为 JPEG(逐个下载保存)
+- 批量导出:所有已导入照片按当前调整参数统一导出为 JPEG,并打包为 **ZIP 压缩包**(自动下载,无需解压工具之外的其他软件)
 - 内嵌预览图:提取文件内嵌的 JPEG 预览(速度极快)
 
 ## 目录结构
@@ -78,5 +78,5 @@ raw-viewer/
 ## 许可与致谢
 
 - 应用代码(除 `libraw/` 外):随意使用,无限制。
-- 解码引擎 [`ybouane/LibRaw-Wasm`](https://github.com/ybouane/LibRaw-Wasm) v1.6.0:Apache-2.0,其底层为 LibRaw(dcraw 衍生),版权归 LibRaw LLC。`libraw/` 目录为编译产物,授权请参考上游仓库。
-- 示例文件 `sample.ARW` 取自 [f-spot/raw-samples](https://gitlab.gnome.org/GNOME/f-spot/-/tree/master/raw-samples/RAW) (Sony A700)。
+- 解码引擎 <a href="https://github.com/ybouane/LibRaw-Wasm" target="_blank" rel="noopener">ybouane/LibRaw-Wasm</a> v1.6.0:Apache-2.0,其底层为 LibRaw(dcraw 衍生),版权归 LibRaw LLC。`libraw/` 目录为编译产物,授权请参考上游仓库。
+- 示例文件 `sample.ARW` 取自 <a href="https://gitlab.gnome.org/GNOME/f-spot/-/tree/master/raw-samples/RAW" target="_blank" rel="noopener">f-spot/raw-samples</a> (Sony A700)。

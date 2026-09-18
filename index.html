@@ -276,44 +276,67 @@
   }
   #pixel b { font-family: var(--mono); color: var(--accent); font-weight: 600; }
 
-  /* 缩略图栏 */
-  #thumbs {
-    display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto;
-    padding: 8px 12px; flex: 0 0 auto;
-    background: var(--bg2); border-top: 1px solid var(--border);
+  /* ---------- 左侧照片列 ---------- */
+  #thumbsCol {
+    flex: 0 0 196px;
+    min-width: 150px; max-width: 300px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; min-height: 0;
+    padding: 10px 10px 12px;
+    gap: 8px;
   }
-  #thumbs:empty { display: none; }
+  #thumbsCol > h3 { flex: 0 0 auto; }
+  #thumbs {
+    flex: 1 1 auto;
+    display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto; overflow-x: hidden;
+    padding-right: 2px;
+  }
+  #thumbs:empty::after {
+    content: '尚未导入照片';
+    display: block; color: var(--faint); font-size: 12px;
+    text-align: center; padding: 26px 0;
+  }
   .thumb {
     position: relative; flex: 0 0 auto;
-    width: 64px; height: 64px; padding: 0;
+    width: 100%; display: block; padding: 0;
     border: 2px solid var(--border); border-radius: 8px;
-    overflow: hidden; background: var(--panel);
-  }
-  #thumbs .thumb { cursor: pointer; }
-  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .thumb .filename {
-    position: absolute; left: 0; right: 0; bottom: 0;
-    font-size: 9.5px; line-height: 1.4; color: #fff;
-    background: rgba(0,0,0,.72); padding: 1px 4px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    overflow: hidden; background: var(--panel); cursor: pointer;
     text-align: left;
   }
+  .thumb img { width: 100%; height: 88px; object-fit: cover; display: block; }
+  .thumb .filename {
+    display: block; font-size: 10px; line-height: 1.5;
+    color: var(--text); padding: 3px 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .thumb .remove {
-    position: absolute; top: -16px; right: -16px;
-    width: 16px; height: 16px; line-height: 14px; text-align: center;
+    position: absolute; top: 3px; right: 3px;
+    width: 18px; height: 18px; line-height: 16px; text-align: center;
     background: var(--red); color: #fff; border: none; border-radius: 4px;
-    font-size: 11px; cursor: pointer; opacity: 0;
+    font-size: 12px; cursor: pointer; opacity: 0;
     transition: opacity .15s;
   }
-  .thumb:hover .remove { opacity: 1; top: 2px; right: 2px; }
+  .thumb:hover .remove { opacity: 1; }
   .thumb.on { border-color: var(--accent); }
-  .thumb .mark {
-    position: absolute; top: 3px; left: 3px;
-    width: 17px; height: 17px; border-radius: 50%;
-    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; line-height: 17px;
-    text-align: center; display: none;
+
+  /* 导出下拉菜单 */
+  .menu-wrap { position: relative; }
+  .menu {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 24px var(--shadow);
+    padding: 4px; min-width: 210px; display: none;
   }
-  .thumb.export-on .mark { display: block; background: var(--accent2); }
+  .menu .menu-item {
+    display: block; width: 100%; text-align: left;
+    background: transparent; border: none; border-radius: 6px;
+    padding: 8px 10px; font-size: 13px; color: var(--text);
+    cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .menu .menu-item:hover { background: var(--panel2); color: var(--accent); }
+  .caret { font-size: 10px; opacity: .7; }
   .progress-pill {
     font-size: 11.5px; color: var(--dim);
     padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px;
@@ -360,6 +383,13 @@
       flex: 0 1 auto; max-width: none; border-left: none; border-top: 1px solid var(--border);
       max-height: 46vh; min-width: 0;
     }
+    #thumbsCol {
+      flex: 0 0 128px; max-width: none;
+      border-right: none; border-top: 1px solid var(--border);
+      padding: 8px 10px;
+    }
+    #thumbs { flex-direction: row; overflow-y: hidden; overflow-x: auto; }
+    .thumb { width: 96px; flex: 0 0 96px; }
   }
 
   /* “正在解码”时的引擎徽标高亮 */
@@ -373,7 +403,14 @@
   <div class="brand"><span class="dot"></span>RAW 文件查看助手 <small>LibRaw-WASM</small></div>
 
   <button id="btnOpen" title="选择 RAW 文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14" opacity=".55"/></svg>打开 RAW…</button>
-  <button id="btnOpenMore" title="在当前列表中追加导入更多文件">＋ 追加</button>
+  <button id="btnOpenMore" title="在当前列表中追加导入更多文件">＋ 追加照片</button>
+  <div class="menu-wrap" id="exportMenuWrap">
+    <button id="btnExportMenu" title="导出当前渲染参数 / 全部照片">⬇ 导出 <span class="caret">▼</span></button>
+    <div class="menu" id="exportMenu">
+      <button class="menu-item" id="menuExportOne">导出当前照片 (JPEG)</button>
+      <button class="menu-item" id="menuExportAll">导出全部照片 (ZIP 压缩包)</button>
+    </div>
+  </div>
   <input type="file" id="file" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
   <input type="file" id="fileMore" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
 
@@ -391,8 +428,6 @@
   <button id="btnZoomView" title="缩放平移">🔍 放大查看</button>
 
   <span class="sep"></span>
-  <button id="btnExport" title="导出当前渲染参数的 JPEG">⬇ 导出</button>
-  <button id="btnExportAll" title="导出所有已导入照片" disabled>⬇ 批量导出</button>
   <button id="btnThumb" title="提取内嵌预览图">🖼 预览图</button>
 
   <button id="btnTheme" title="切换白天 / 黑夜外观">🌙</button>
@@ -408,6 +443,10 @@
 </header>
 
 <main>
+  <div id="thumbsCol">
+    <h3>已导入照片</h3>
+    <div id="thumbs" title="已导入照片,点击缩略图切换查看"></div>
+  </div>
   <div id="content">
     <div class="iv-holder" id="holder">
       <canvas id="canvas"></canvas>
@@ -500,8 +539,6 @@
       </div>
       </aside>
 </main>
-
-<div id="thumbs" title="已导入照片,点击缩略图切换查看"></div>
 
 <footer id="statusbar">
   <span id="fileInfo"></span>
