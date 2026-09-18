@@ -720,25 +720,61 @@ async function importFiles(files, mode) {
   }
   setBadge('导入中…', '');
   const total = arr.length;
-  const firstIdx = mode === 'replace' ? 0 : photoList.length;
-  for (let i = 0; i < total; i++) {
-    const f = arr[i];
-    setBusy(true, `正在解析 ${i + 1}/${total}…`, f.name);
-    await new Promise(r => setTimeout(r, 20));
-    try {
-      const doc = await decodeFile(f, currentEngine);
-      const entry = { file: f, doc, thumbUrl: '' };
-      photoList.push(entry);
-      const t = await makeThumb(entry);   // 内嵌预览解码串行,先生成占位再填充
-      entry.thumbUrl = t;
-      updateThumbBar();
-    } catch (e) {
-      console.error('导入失败', f.name, e);
-      setBadge('导入失败: ' + (e && e.message || e), 'err');
+  // 批量导入并行解码:LibRaw 每次实例对应一个独立 Worker(pthread),
+  // 串行循环时整批只有单核在解码,浪费多核。改为分批并发,
+  // 同一时刻最多并发 CONCURRENCY 个文件同时解码,大幅缩短整体耗时。
+  const CONCURRENCY = Math.max(2, Math.min(navigator.hardwareConcurrency || 4, 4));
+  const results = new Array(total);
+  const progressBar = done => {
+    const pct = Math.round(done / total * 100);
+    val('pMsg').textContent = `正在解析 ${Math.min(done + 1, total)}/${total}…`;
+    progress(pct);
+  };
+  progressBar(0);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < total) {
+      const i = cursor++;
+      const f = arr[i];
+      try {
+        const doc = await decodeFile(f, currentEngine);
+        const entry = { file: f, doc, thumbUrl: '' };
+        results[i] = entry;
+        progressBar(i + 1);
+      } catch (e) {
+        console.error('导入失败', f.name, e);
+        results[i] = { error: e };
+      }
     }
   }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()));
+  // 全部解码完成后再统一生成缩略图与刷新列表
+  if (mode === 'replace') {
+    for (const e of photoList) { if (e.thumbUrl) URL.revokeObjectURL(e.thumbUrl); if (e.doc && e.doc.raw) { try { e.doc.raw.dispose(); } catch (_) {} } }
+    photoList = []; currentIdx = -1;
+    if (cur) { cur = null; renderCanvas = null; renderCtx = null; currentOut = null; }
+    thumbsEl.innerHTML = '';
+  }
+  let failCount = 0;
+  for (let i = 0; i < total; i++) {
+    const r = results[i];
+    if (r && !r.error) {
+      const entry = r;
+      photoList.push(entry);
+      try {
+        const t = await makeThumb(entry);
+        entry.thumbUrl = t;
+      } catch (e2) { console.error('缩略图失败', arr[i].name, e2); }
+    } else {
+      failCount++;
+      console.error('导入失败', arr[i].name, r && r.error);
+      setBadge(`导入失败: ${arr[i].name}: ${r && r.error && r.error.message || r.error}`, 'err');
+    }
+  }
+  updateThumbBar();
   progressEl.classList.remove('show');
   setBusy(false);
+  if (failCount === total) { setBadge('全部导入失败', 'err'); return; }
   if (mode === 'append') {
     // 追加导入:保留当前选中照片
     if (currentIdx < 0 && photoList.length) setActivePhoto(0);
