@@ -10,12 +10,12 @@
 
 ```bash
 cd raw-viewer
-python -m http.server 8123
+python -m http.server 3025
 ```
 
-然后浏览器打开 http://127.0.0.1:8123/index.html
+然后浏览器打开 http://127.0.0.1:3025/index.html
 
-> Windows 下端口如被占用,换一个端口如 `8124` 即可。
+> Windows 下端口如被占用,换一个端口如 `3026` 即可。
 
 ## 使用方式
 
