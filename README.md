@@ -2,20 +2,27 @@
 
 一个完全在浏览器本地的相机 RAW 照片查看助手。打开、解码、渲染、调整、导出,全程不离开浏览器,数据不会上传到任何服务器。
 
-底层由 <a href="https://github.com/ybouane/LibRaw-Wasm" target="_blank" rel="noopener">LibRaw-Wasm</a> (v1.6.0, Apache-2.0) 提供解码能力 —— LibRaw 通过 Emscripten 编译为 WebAssembly,在 Web Worker 中并行运行,不阻塞界面。
+底层由 [LibRaw-Wasm](https://github.com/ybouane/LibRaw-Wasm) (v1.6.0, Apache-2.0) 提供解码能力 —— LibRaw 通过 Emscripten 编译为 WebAssembly,在 Web Worker 中并行运行,不阻塞界面。
 
 ## 快速开始
 
-本项目是纯静态前端,用任意静态服务器提供目录即可。推荐用 Python 自带服务器:
+开发模式(Vite + React + TypeScript + shadcn/ui):
 
 ```bash
-cd raw-viewer
-python -m http.server 3025
+npm install
+npm run dev
 ```
 
-然后浏览器打开 <a href="http://127.0.0.1:3025/index.html" target="_blank" rel="noopener">http://127.0.0.1:3025/index.html</a>
+然后浏览器打开终端提示的地址(默认 http://localhost:5173)。
 
-> Windows 下端口如被占用,换一个端口如 `3026` 即可。
+生产构建:
+
+```bash
+npm run build
+npm run preview
+```
+
+也可以把 `dist/` 目录交给任意静态服务器。仓库已配置 GitHub Actions,推送到 `main` 会自动构建并部署到 GitHub Pages。
 
 ## 使用方式
 
@@ -27,7 +34,7 @@ python -m http.server 3025
 
 **打开与解码**
 - 支持的格式:CR2 / CR3 / NEF / ARW / RAF / RW2 / ORF / PEF / DNG 以及 LibRaw 支持的其他常见 RAW(dcraw 格式清单)
-- 批量导入:一次可多选/拖入多张 RAW;左侧缩略图列点击即可切换当前照片,悬停可移除单张,「＋ 追加照片」可在当前列表继续添加文件
+- 批量导入:一次可多选/拖入多张 RAW;左侧缩略图列点击即可切换当前照片,悬停可移除单张,「＋ 追加照片」可在当前列表继续添加文件;导入过程显示「正在解析照片 X/N」进度
 - 三档解码质量,可随时切换,切换即重新解码:
   | 档位 | 说明 |
   |---|---|
@@ -51,22 +58,28 @@ python -m http.server 3025
 
 **导出与预览**
 - 导出:把当前渲染参数(曝光、白平衡、色调等)套用到全尺寸图并导出为 JPEG
-- 批量导出:所有已导入照片按当前调整参数统一导出为 JPEG,并打包为 **ZIP 压缩包**(自动下载,无需解压工具之外的其他软件)
+- 批量导出:所有已导入照片按当前调整参数统一导出为 JPEG,并打包为 **ZIP 压缩包**(自动下载)
 - 内嵌预览图:提取文件内嵌的 JPEG 预览(速度极快)
 
-## 目录结构
+## 技术栈与目录结构
+
+- 构建:Vite + React 19 + TypeScript
+- UI:shadcn/ui(Tailwind CSS v4),深色主题
+- 解码:LibRaw-Wasm(Web Worker + pthread)
 
 ```
 raw-viewer/
-├── index.html       入口页面
-├── app.js           全部应用逻辑(原生 ES Modules,无框架无依赖)
-├── libraw/          解码引擎(LibRaw-Wasm 编译产物,原样保留)
-│   ├── index.js     promise 化 wrapper
-│   ├── worker.js    Emscripten Worker 运行时
-│   ├── libraw.js    LibRaw 编译产物
-│   ├── libraw.wasm  WebAssembly 二进制 (Apache-2.0)
-│   └── libraw_wrapper.cpp  (参考)LibRaw 到 JS 的桥接源码
-└── sample.ARW       测试用示例文件(Sony A700 样片,可删除)
+├── index.html          Vite 入口
+├── vite.config.ts      Vite 配置(base './',支持 GitHub Pages 子路径)
+├── src/
+│   ├── App.tsx         三列布局 + 状态编排
+│   ├── components/     Toolbar / ThumbColumn / Viewer / SidePanel / ui(shadcn)
+│   ├── hooks/          useRawViewer / useTheme
+│   └── lib/            libraw.ts(worker 封装) / rawEngine.ts(解码) / render.ts(渲染) / format.ts(导出)
+├── public/
+│   ├── libraw/         LibRaw-Wasm 编译产物(worker.js / libraw.js / libraw.wasm)
+│   └── samples/        测试用示例文件
+└── .github/workflows/  GitHub Pages 自动构建部署
 ```
 
 ## 技术说明
@@ -77,6 +90,6 @@ raw-viewer/
 
 ## 许可与致谢
 
-- 应用代码(除 `libraw/` 外):随意使用,无限制。
-- 解码引擎 <a href="https://github.com/ybouane/LibRaw-Wasm" target="_blank" rel="noopener">ybouane/LibRaw-Wasm</a> v1.6.0:Apache-2.0,其底层为 LibRaw(dcraw 衍生),版权归 LibRaw LLC。`libraw/` 目录为编译产物,授权请参考上游仓库。
-- 示例文件 `sample.ARW` 取自 <a href="https://gitlab.gnome.org/GNOME/f-spot/-/tree/master/raw-samples/RAW" target="_blank" rel="noopener">f-spot/raw-samples</a> (Sony A700)。
+- 应用代码(除 `public/libraw/` 外):随意使用,无限制。
+- 解码引擎 [ybouane/LibRaw-Wasm](https://github.com/ybouane/LibRaw-Wasm) v1.6.0:Apache-2.0,其底层为 LibRaw(dcraw 衍生),版权归 LibRaw LLC。`public/libraw/` 目录为编译产物,授权请参考上游仓库。
+- 示例文件 `samples/sample.ARW` 取自 [f-spot/raw-samples](https://gitlab.gnome.org/GNOME/f-spot/-/tree/master/raw-samples/RAW) (Sony A700)。
