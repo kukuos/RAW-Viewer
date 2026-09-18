@@ -1,5 +1,5 @@
 // 右侧面板:直方图 / 信息 / 位置 / 调整(Tabs 切换)
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -19,6 +19,7 @@ interface Props {
   onWb: (key: string, gains?: WbGains) => void
   gains: WbGains
   onGains: (g: WbGains) => void
+  onDraggingChange: (d: boolean) => void
 }
 
 function Histogram({ cur, currentOut }: { cur: RawDoc | null; currentOut: Uint8Array | null }) {
@@ -93,9 +94,18 @@ interface AdjustProps {
   onWb: (key: string, gains?: WbGains) => void
   gains: WbGains
   onGains: (g: WbGains) => void
+  onDraggingChange: (d: boolean) => void
 }
 
-function Adjust({ adjust, onAdjust, wbKey, onWb, gains, onGains }: AdjustProps) {
+function Adjust({ adjust, onAdjust, wbKey, onWb, gains, onGains, onDraggingChange }: AdjustProps) {
+  const [dragStamp, setDragStamp] = useState(0)
+  useEffect(() => {
+    // 滑块松手(最后 onChange 后 150ms 无新事件)切回全分辨率渲染
+    if (dragStamp > 0) {
+      const t = setTimeout(() => onDraggingChange(false), 150)
+      return () => clearTimeout(t)
+    }
+  }, [dragStamp, onDraggingChange])
   return (
     <div className="flex flex-col gap-4">
       {SLIDERS.map(s => (
@@ -109,7 +119,11 @@ function Adjust({ adjust, onAdjust, wbKey, onWb, gains, onGains }: AdjustProps) 
             min={s.min}
             max={s.max}
             step={s.step}
-            onValueChange={v => onAdjust({ [s.key]: v[0] } as Partial<AdjustOpts>)}
+            onValueChange={v => {
+              onDraggingChange(true)
+              setDragStamp(Date.now())
+              onAdjust({ [s.key]: v[0] } as Partial<AdjustOpts>)
+            }}
           />
         </div>
       ))}
@@ -238,6 +252,7 @@ export function SidePanel(props: Props) {
             onWb={props.onWb}
             gains={props.gains}
             onGains={props.onGains}
+            onDraggingChange={props.onDraggingChange}
           />
         </div>
       )}

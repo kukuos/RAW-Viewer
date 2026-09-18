@@ -7,7 +7,7 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Download, FolderOpen, ListPlus, Minus, Plus,
-  Sun, Moon, BarChart3, Info, MapPin, SlidersHorizontal, Search, Image as ImageIcon,
+  Sun, Moon, BarChart3, Info, MapPin, SlidersHorizontal, Search,
 } from 'lucide-react'
 import { ENGINES } from '@/lib/rawEngine'
 import { cn } from '@/lib/utils'
@@ -77,10 +77,6 @@ export function Toolbar(p: ToolbarProps) {
           <TabsTrigger value="zoom" title="缩放平移"><Search className="size-4" /><span className="hidden lg:inline">放大查看</span></TabsTrigger>
         </TabsList>
       </Tabs>
-
-      <Button size="sm" variant="ghost" title="提取内嵌预览图" onClick={() => {}}>
-        <ImageIcon className="size-4" /><span className="hidden lg:inline">预览图</span>
-      </Button>
 
       <Button size="icon-sm" variant="ghost" onClick={p.onToggleTheme} title="切换白天 / 黑夜外观">
         {p.theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}

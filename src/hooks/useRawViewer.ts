@@ -48,6 +48,8 @@ export function useRawViewer() {
   const [exporting, setExporting] = useState(false)
   const [status, setStatus] = useState<{ text: string; kind: 'ok' | 'err' | 'warn' | 'info' }>({ text: '', kind: 'info' })
   const [currentFile, setCurrentFile] = useState<File | null>(null)
+  // 滑块拖动中:高频 adjust 变化,渲染走低分辨率预览,松手后全量
+  const [adjustDragging, setAdjustDragging] = useState(false)
 
   const cur = currentIdx >= 0 ? photoList[currentIdx]?.doc ?? null : null
   const listRef = useRef(photoList)
@@ -72,12 +74,6 @@ export function useRawViewer() {
     const arr = Array.from(files)
     const total = arr.length
 
-    if (mode === 'replace') {
-      listRef.current.forEach(e => disposeDoc(e.doc))
-      setPhotoList([])
-      setCurrentIdx(-1)
-    }
-
     setImportState({ phase: 'decoding', done: 0, total })
     const results = new Array<PhotoEntry | { error: Error }>(total)
     const CONCURRENCY = Math.max(2, Math.min(navigator.hardwareConcurrency || 4, 4))
@@ -100,12 +96,6 @@ export function useRawViewer() {
       }
     }
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker()))
-
-    if (mode === 'replace') {
-      listRef.current.forEach(e => disposeDoc(e.doc))
-      setPhotoList([])
-      setCurrentIdx(-1)
-    }
 
     let failCount = 0
     const entries: PhotoEntry[] = []
@@ -138,8 +128,7 @@ export function useRawViewer() {
     // 追加模式保留当前选中;replace 默认选第一张
     if (mode === 'append') {
       if (currentIdx < 0 && entries.length) {
-        const idx = photoList.length
-        setCurrentIdx(idx)
+        setCurrentIdx(photoList.length)
       }
     } else if (entries.length) {
       setCurrentIdx(0)
@@ -225,11 +214,12 @@ export function useRawViewer() {
     wbKey, setWb, gains, setGains,
     importState, setImportState, exporting, setExporting,
     status, setStatus, currentFile, storeCurrentFile,
+    adjustDragging, setAdjustDragging,
     importFiles, selectPhoto, removePhoto, applyWbPreset, switchEngine,
   }), [
     photoList, currentIdx, cur, currentEngine, adjust, updateAdjust,
     wbKey, setWb, gains, setGains, importState, exporting, status,
-    currentFile, storeCurrentFile, importFiles, selectPhoto, removePhoto,
-    applyWbPreset, switchEngine,
+    currentFile, storeCurrentFile, adjustDragging,
+    importFiles, selectPhoto, removePhoto, applyWbPreset, switchEngine,
   ])
 }

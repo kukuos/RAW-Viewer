@@ -157,3 +157,41 @@ export function renderToCanvas(doc: Pick<RawDoc, 'w' | 'h' | 'src'>, opts: Adjus
   ctx.putImageData(new ImageData(new Uint8ClampedArray(out.buffer, 0, out.length), doc.w, doc.h), 0, 0)
   return c
 }
+
+// 预览渲染:降采样到 maxW(默认 1920)以内,拖动滑块时用,显著降低每帧耗时
+export function renderPreviewCanvas(
+  doc: Pick<RawDoc, 'w' | 'h' | 'src'>,
+  opts: AdjustOpts,
+  extraGains?: { r: number; g: number; b: number },
+  maxW = 1920,
+) {
+  const c = document.createElement('canvas')
+  const scale = Math.min(1, maxW / doc.w)
+  const pw = Math.max(1, Math.round(doc.w * scale))
+  const ph = Math.max(1, Math.round(doc.h * scale))
+  c.width = pw; c.height = ph
+  const scaleX = doc.w / pw, scaleY = doc.h / ph
+  // 最近邻降采样:从原图抽取每 (scaleX, scaleY) 块的代表像素
+  const preview = new Uint8Array(pw * ph * 4)
+  const src = doc.src
+  {
+    let qi = 0
+    for (let y = 0; y < ph; y++) {
+      const sy = Math.min(doc.h - 1, Math.round(y * scaleY))
+      const rowBase = sy * doc.w
+      for (let x = 0; x < pw; x++) {
+        const sp = (rowBase + Math.min(doc.w - 1, Math.round(x * scaleX))) * 4
+        preview[qi++] = src[sp]
+        preview[qi++] = src[sp + 1]
+        preview[qi++] = src[sp + 2]
+        preview[qi++] = 255
+      }
+    }
+  }
+  const tmp: Pick<RawDoc, 'w' | 'h' | 'src'> = { w: pw, h: ph, src: preview }
+  const ctx = c.getContext('2d')!
+  const final = new Uint8Array(pw * ph * 4)
+  renderFrame(tmp, opts, final, extraGains)
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(final.buffer, 0, final.length), pw, ph), 0, 0)
+  return c
+}

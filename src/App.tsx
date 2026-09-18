@@ -26,19 +26,22 @@ export default function App() {
     photoList, currentIdx, cur, currentEngine, adjust, updateAdjust,
     wbKey, gains, setGains, importState, exporting, setExporting,
     status, setStatus, storeCurrentFile, importFiles, selectPhoto, removePhoto,
-    applyWbPreset, switchEngine,
+    applyWbPreset, switchEngine, adjustDragging, setAdjustDragging,
   } = rw
 
   // 渲染当前照片:生成离屏画布并交由 Viewer;同时维护 currentOut 供直方图
   useEffect(() => {
     if (!cur) { setCurrentOut(null); setRenderTime(''); return }
+    // 拖动滑块时:大图由 Viewer 单独渲染(低分辨率 preview),这里只更新时间,
+    // 不再重复渲染/更新直方图(直方图保持松手前快照,避免拖动中双重渲染卡顿)
+    if (adjustDragging) { setRenderTime('渲染中…'); return }
     const t0 = performance.now()
     const c = renderToCanvas(cur, adjust, gains)
     const ctx = c.getContext('2d')!
     const id = ctx.getImageData(0, 0, c.width, c.height)
     setCurrentOut(new Uint8Array(id.data.buffer.slice(id.data.byteOffset, id.data.byteOffset + id.data.byteLength)))
     setRenderTime('渲染 ' + (performance.now() - t0).toFixed(1) + ' ms')
-  }, [cur, adjust, gains])
+  }, [cur, adjust, gains, adjustDragging])
 
   const onOpenClick = useCallback(() => fileInput.current?.click(), [])
   const onAppendClick = useCallback(() => fileMore.current?.click(), [])
@@ -96,9 +99,13 @@ export default function App() {
     setCoords(`${x}, ${y} · RGB ${rgb[0]}, ${rgb[1]}, ${rgb[2]}`)
   }, [])
 
-  // 打开后默认展开「调整」面板
+  // 打开后默认展开「调整」面板,并重置为适应窗口(不进入放大查看)
   useEffect(() => {
-    if (cur) setPanel('adj')
+    if (cur) {
+      setPanel('adj')
+      setZoomView(false)
+      zoomApi.current?.fit()
+    }
   }, [cur])
 
   const handlePanel = useCallback((p: string) => {
@@ -109,9 +116,9 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <input ref={fileInput} type="file" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.fff,.mos,.ptx,.rwl" className="hidden"
-        onChange={e => { const f = e.target.files; e.target.value = ''; if (f?.length) doImport(f, 'replace') }} />
+        onChange={e => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) doImport(f, 'replace') }} />
       <input ref={fileMore} type="file" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.fff,.mos,.ptx,.rwl" className="hidden"
-        onChange={e => { const f = e.target.files; e.target.value = ''; if (f?.length) doImport(f, 'append') }} />
+        onChange={e => { const f = Array.from(e.target.files || []); e.target.value = ''; if (f.length) doImport(f, 'append') }} />
 
       <Toolbar
         onOpen={onOpenClick}
@@ -120,7 +127,7 @@ export default function App() {
         onExportAll={onExportAll}
         onZoomIn={() => zoomApi.current?.zoomIn()}
         onZoomOut={() => zoomApi.current?.zoomOut()}
-        onFit={() => { setZoomView(true); zoomApi.current?.fit() }}
+        onFit={() => { zoomApi.current?.fit() }}
         on100={() => zoomApi.current?.hundred()}
         engine={currentEngine}
         onEngine={eng => switchEngine(eng)}
@@ -144,7 +151,7 @@ export default function App() {
         <ThumbColumn list={photoList} currentIdx={currentIdx} onSelect={selectPhoto} onRemove={removePhoto} />
 
         <main className="relative flex min-w-0 flex-1 flex-col">
-          <div className="relative min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1 flex-col">
             <Viewer
               cur={cur}
               adjust={adjust}
@@ -154,6 +161,7 @@ export default function App() {
               importState={importState}
               zoomApiRef={zoomApi}
               onPixelPick={onPixelPick}
+              adjusting={adjustDragging}
             />
           </div>
 
@@ -185,6 +193,7 @@ export default function App() {
           onWb={key => applyWbPreset(key)}
           gains={gains}
           onGains={g => setGains(g)}
+          onDraggingChange={setAdjustDragging}
         />
       </div>
     </div>

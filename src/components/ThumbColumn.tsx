@@ -26,7 +26,7 @@ export function ThumbColumn({ list, currentIdx, onSelect, onRemove }: Props) {
       <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
         {list.map((e, i) => (
           <div key={e.file.name + i} className={cn(
-            'group relative cursor-pointer overflow-hidden rounded-lg border-2 transition-colors',
+            'group relative shrink-0 cursor-pointer overflow-hidden rounded-lg border-2 transition-colors',
             i === currentIdx ? 'border-primary' : 'border-transparent hover:border-muted-foreground/40',
           )} onClick={() => onSelect(i)}>
             <img src={e.thumbUrl} alt="" className="block h-40 w-full object-contain bg-card" />
