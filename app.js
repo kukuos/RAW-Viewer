@@ -620,25 +620,37 @@ const thumbsEl = val('thumbs');
 
 // 缩略图统一从已解码的全分辨率像素 doc.src 生成,
 // 保证清晰(不依赖可能很小或过度压缩的内嵌预览)。
-// 缩略图做成纵向铺满两行的三宫格:上面 2/3 是照片画面(cover 裁切),
-// 下面 1/3 加一层半透明遮罩叠放文件名,一眼能认出是哪张照片。
+// 用「contain 语义」生成:整张照片完整缩进一个 392×264 的框里,
+// 左右留白处用原图边缘颜色填充(不会出现黑边),底部压暗并叠文件名。
+// 这样无论横图竖图都能在缩略图里看到照片全貌,不会只露出左上角。
 async function makeThumb(entry) {
   try {
     const c = document.createElement('canvas');
     const w = entry.doc.w, h = entry.doc.h;
-    const cw = 392, ch = 264;            // 三宫格尺寸:画面区高约 176 + 文字区高约 88
-    const scale = Math.max(cw / w, ch / h);   // cover 语义:填满整个画布,超出由 CSS 裁切
-    c.width = Math.max(1, Math.round(w * scale));
-    c.height = Math.max(1, Math.round(h * scale));
+    const cw = 392, ch = 264;            // 目标框
+    const scale = Math.min(cw / w, ch / h);   // contain 语义:整张图都放下
+    const dw = Math.max(1, Math.round(w * scale)), dh = Math.max(1, Math.round(h * scale));
+    c.width = cw; c.height = ch;
     const ctx = c.getContext('2d');
     const img = new ImageData(new Uint8ClampedArray(entry.doc.src.buffer, 0, w * h * 4), w, h);
-    ctx.putImageData(img, 0, 0);
-    // 下部 1/3 压暗,让文件名在白字下依然可读
-    const grad = ctx.createLinearGradient(0, c.height * 0.62, 0, c.height);
+    // 先在整图画布上用 drawImage 缩放绘制完整照片(drawImage 会缩放,putImageData 不会),
+    // 这样整张照片按 contain 语义缩入目标框,不会再出现「只露左上角」的问题。
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').putImageData(img, 0, 0);
+    // 左右/上下留白处用原图四角平均色铺满,避免黑边
+    const d = img.data;
+    const avg = i => Math.round((d[i] + d[i + 4] + d[i + 8] + d[i + 12]) / 4);
+    ctx.fillStyle = `rgb(${avg(0)},${avg(1)},${avg(2)})`;
+    ctx.fillRect(0, 0, cw, ch);
+    const ox = Math.round((cw - dw) / 2), oy = Math.round((ch - dh) / 2);
+    ctx.drawImage(tmp, ox, oy, dw, dh);            // 缩放绘制:整张照片完整缩入框内
+    // 底部 1/4 压暗,叠文件名
+    const grad = ctx.createLinearGradient(0, ch * 0.72, 0, ch);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, 'rgba(0,0,0,.55)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, c.height * 0.62, c.width, c.height * 0.38);
+    ctx.fillRect(0, ch * 0.72, cw, ch * 0.28);
     return c.toDataURL('image/jpeg', 0.82);
   } catch (_) {
     return '';
