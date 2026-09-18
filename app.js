@@ -101,6 +101,112 @@ const ENGINES = {
   3: { label: '快速',   userQual: 2, halfSize: true  },
 };
 
+// ===================================================================
+// Linear DNG 检测与内嵌全尺寸 JPEG 提取
+//
+// Lightroom 等导出工具生成的 Linear DNG 内是已去马赛克的 LinearRaw
+// 数据(PhotometricInterpretation=34892)。这类文件往往缺少有效的
+// Bayer 阵列与白平衡参数(cam_mul 可能为 [0,1,0,0] 之类的异常值),
+// LibRaw 走 LinearRaw 路径时忽略 userMul 等设置,输出整体灰白、
+// 褪色,并在特定区域偏绿;而文件内大多还内嵌一张由导出工具渲染的
+// 全尺寸 JPEG 预览,颜色准确。这里优先解析出该 JPEG 作为显示来源。
+// ===================================================================
+function isLinearDng(m) {
+  if (!m) return false;
+  if ((m.camera_make || '').trim() === 'TIFF') return true;
+  const cd = m.color_data;
+  if (cd && cd.filters === 0 && cd.colors >= 3 && /RGB/.test(m.cdesc || '')) return true;
+  return false;
+}
+
+// 解析 TIFF/IFD 链(IFD0 + SubIFDs),找出尺寸最大的内嵌 JPEG 预览
+// 返回 { off, len, w, h } 或 null;仅在文件为 JPEG 压缩的 RGB/YCbCr 段中挑选
+function extractEmbeddedJpeg(buf) {
+  const dv = new DataView(buf);
+  if (dv.byteLength < 16) return null;
+  const b0 = dv.getUint16(0);
+  if (b0 !== 0x4949 && b0 !== 0x4d4d) return null;      // 'II' / 'MM'
+  const le = b0 === 0x4949;
+  const u16 = o => dv.getUint16(o, le);
+  const u32 = o => dv.getUint32(o, le);
+  if (u16(2) !== 42) return null;                        // TIFF magic
+
+  let best = null;
+
+  // 取一条 tag 的首个整数值
+  const firstVal = (voff, typ, cnt) => {
+    if (!cnt) return 0;
+    if (typ === 1) return dv.getUint8(voff);
+    if (typ === 3) return dv.getUint16(voff, le);
+    if (typ === 4) return dv.getUint32(voff, le);
+    return 0;
+  };
+
+  const visit = off => {
+    if (off <= 0 || off + 2 > dv.byteLength) return;
+    const n = u16(off);
+    if (!n || off + 2 + n * 12 + 4 > dv.byteLength) return;
+    let newSub = 0, w = 0, h = 0, comp = 0, phot = 0;
+    let so = 0, sbc = 0, jpgo = 0, jpgl = 0, subIfds = null;
+    for (let i = 0; i < n; i++) {
+      const e = off + 2 + i * 12;
+      const tag = u16(e), typ = u16(e + 2), cnt = u32(e + 4);
+      const size = typ === 1 ? 1 : typ === 3 ? 2 : typ === 4 ? 4 : typ === 5 ? 8 : 0;
+      if (!size || !cnt) continue;
+      let voff = e + 8;
+      if (size * cnt > 4) voff = u32(e + 8);
+      if (voff + size * cnt > dv.byteLength) continue;
+      switch (tag) {
+        case 0x00fe: newSub = firstVal(voff, typ, cnt); break;              // NewSubfileType
+        case 0x0100: w = firstVal(voff, typ, cnt); break;                   // ImageWidth
+        case 0x0101: h = firstVal(voff, typ, cnt); break;                   // ImageLength
+        case 0x0103: comp = firstVal(voff, typ, cnt); break;                // Compression
+        case 0x0106: phot = firstVal(voff, typ, cnt); break;                // PhotometricInterpretation
+        case 0x0111: so = firstVal(voff, typ, cnt); break;                  // StripOffsets
+        case 0x0117: sbc = firstVal(voff, typ, cnt); break;                 // StripByteCounts
+        case 0x0201: jpgo = firstVal(voff, typ, cnt); break;                // JPEGInterchangeFormat
+        case 0x0202: jpgl = firstVal(voff, typ, cnt); break;                // JPEGInterchangeFormatLength
+        case 0x014a: {                                                      // SubIFDs
+          if (typ === 4) { subIfds = []; for (let k = 0; k < cnt; k++) subIfds.push(u32(voff + k * 4)); }
+          else if (typ === 3) { subIfds = []; for (let k = 0; k < cnt; k++) subIfds.push(u16(voff + k * 2)); }
+          break;
+        }
+      }
+    }
+    // 仅考虑 JPEG 压缩(6/7)的 RGB(2)/YCbCr(6)预览,LinearRaw(34892)等跳过
+    if ((comp === 6 || comp === 7) && (phot === 2 || phot === 6)) {
+      const off = jpgo || so, len = jpgl || sbc;
+      if (off > 0 && len > 0 && w > 0 && h > 0 &&
+          off + len <= dv.byteLength &&
+          dv.getUint8(off) === 0xff && dv.getUint8(off + 1) === 0xd8 &&
+          (!best || w * h > best.w * best.h)) {
+        best = { off, len, w, h, full: newSub === 1 };
+      }
+    }
+    if (subIfds) for (const s of subIfds) visit(s);
+  };
+
+  visit(u32(4));   // IFD0
+  return best;
+}
+
+// 把内嵌 JPEG 解码为 RGBA8 像素
+async function jpegToRgba(buf, off, len) {
+  const blob = new Blob([new Uint8Array(buf.slice(off, off + len))], { type: 'image/jpeg' });
+  const bitmap = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bitmap.width; c.height = bitmap.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const id = ctx.getImageData(0, 0, c.width, c.height);
+  return {
+    w: c.width, h: c.height,
+    src: new Uint8Array(id.data.buffer.slice(id.data.byteOffset, id.data.byteOffset + id.data.byteLength)),
+    format: 'jpeg',
+  };
+}
+
 // 解码:返回带 src(RGBA8)的文档对象
 async function decodeFile(file, engineKey, extraParams = {}) {
   const eng = ENGINES[engineKey];
@@ -108,6 +214,39 @@ async function decodeFile(file, engineKey, extraParams = {}) {
 
   setBusy(true, '正在解析 RAW 文件…', file.name);
   await new Promise(r => setTimeout(r, 30));
+
+  // ------------------------------------------------------------------
+  // 1) Linear DNG:直接用内嵌全尺寸 JPEG 作为显示来源
+  //    (LibRaw 解码 LinearRaw 数据输出灰白/褪色/偏绿,见文件头注释)
+  // ------------------------------------------------------------------
+  if (!extraParams.forceLibRaw) {
+    const probeInst = new LibRaw();
+    let mProbe = null;
+    try {
+      await probeInst.open(new Uint8Array(buf.slice(0)), {});
+      mProbe = await probeInst.metadata(true);
+    } catch (_) {}
+    try { probeInst.dispose(); } catch (_) {}
+    if (isLinearDng(mProbe)) {
+      const jpeg = extractEmbeddedJpeg(buf);
+      if (jpeg) {
+        setBusy(true, '检测到 Linear DNG,使用内嵌全尺寸 JPEG…', file.name + '  尺寸 ' + jpeg.w + '×' + jpeg.h);
+        await new Promise(rr => setTimeout(rr, 30));
+        const px = await jpegToRgba(buf, jpeg.off, jpeg.len);
+        const doc = { w: px.w, h: px.h, src: px.src, name: file.name, size: file.size, engine: engineKey, linearDng: true };
+        doc.embedded = { off: jpeg.off, len: jpeg.len, w: jpeg.w, h: jpeg.h };
+        doc.meta = {
+          camera_make: 'Linear DNG',
+          camera_model: 'Lightroom',
+          software: mProbe && mProbe.software,
+          width: px.w, height: px.h,
+          desc: '线性 DNG(已去马赛克),使用内嵌全尺寸 JPEG 显示。原始 Bayer 数据不在此类文件中。',
+        };
+        return doc;
+      }
+    }
+    // 非 Linear DNG:继续走 LibRaw(上面的探测实例已释放)
+  }
 
   const bytes = new Uint8Array(buf.slice(0));   // open() 会 detach 缓冲区
   const r = new LibRaw();
@@ -498,6 +637,7 @@ async function openFile(file, engineKey) {
     showMetaPanel();
     showMapPanel();
     fileInfoEl.textContent = `${file.name} · ${fmtBytes(file.size)} · ${cur.w}×${cur.h}`;
+    if (cur.linearDng) fileInfoEl.textContent += ' · 内嵌全尺寸 JPEG';
     setBadge('就绪', 'ok');
     setView('zoom');
   } catch (e) {
@@ -712,6 +852,17 @@ btn('btnThumb').addEventListener('click', async () => {
   if (!cur) return;
   setBusy(true, '读取内嵌预览…');
   try {
+    // Linear DNG 没有可用的 LibRaw thumb;直接用提取到的内嵌 JPEG
+    if (cur.linearDng && cur.embedded) {
+      const blob = new Blob([new Uint8Array(cur.src.buffer.slice(cur.embedded.off, cur.embedded.off + cur.embedded.len))], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      const w = window.open('', 'thumb');
+      if (!w) throw new Error('浏览器阻止了弹出窗口');
+      w.document.write(`<html><head><meta charset="utf-8"><title>内嵌预览 - ${escapeHtml(curFile ? curFile.name : '')}</title></head><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;height:100vh"><img src="${url}" style="max-width:100%;max-height:100%"></body></html>`);
+      w.document.close();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      return;
+    }
     if (!thumbCache) {   // 同一 LibRaw 实例只能成功解码一次内嵌预览,失败也不缓存
       const t = await cur.raw.thumbnailData();
       if (!t || !t.data || !t.data.length) throw new Error('该文件无内嵌预览图');
