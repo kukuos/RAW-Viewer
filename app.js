@@ -620,18 +620,25 @@ const thumbsEl = val('thumbs');
 
 // 缩略图统一从已解码的全分辨率像素 doc.src 生成,
 // 保证清晰(不依赖可能很小或过度压缩的内嵌预览)。
-// 生成分辨率按缩略图显示框(约 196×88)的 2 倍,避免被拉大后发糊。
+// 缩略图做成纵向铺满两行的三宫格:上面 2/3 是照片画面(cover 裁切),
+// 下面 1/3 加一层半透明遮罩叠放文件名,一眼能认出是哪张照片。
 async function makeThumb(entry) {
   try {
     const c = document.createElement('canvas');
     const w = entry.doc.w, h = entry.doc.h;
-    const cw = 392, ch = 176;            // 目标显示框的约 2 倍
-    const scale = Math.max(cw / w, ch / h);   // cover 语义:填满框,多余部分由 CSS 裁切
+    const cw = 392, ch = 264;            // 三宫格尺寸:画面区高约 176 + 文字区高约 88
+    const scale = Math.max(cw / w, ch / h);   // cover 语义:填满整个画布,超出由 CSS 裁切
     c.width = Math.max(1, Math.round(w * scale));
     c.height = Math.max(1, Math.round(h * scale));
     const ctx = c.getContext('2d');
     const img = new ImageData(new Uint8ClampedArray(entry.doc.src.buffer, 0, w * h * 4), w, h);
     ctx.putImageData(img, 0, 0);
+    // 下部 1/3 压暗,让文件名在白字下依然可读
+    const grad = ctx.createLinearGradient(0, c.height * 0.62, 0, c.height);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,.55)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, c.height * 0.62, c.width, c.height * 0.38);
     return c.toDataURL('image/jpeg', 0.82);
   } catch (_) {
     return '';
@@ -645,7 +652,7 @@ function updateThumbBar() {
     el.className = 'thumb' + (i === currentIdx ? ' on' : '');
     el.title = entry.file.name;
     el.innerHTML = `<img alt="" src="${entry.thumbUrl}"><span class="filename"></span>`;
-    el.querySelector('.filename').textContent = entry.file.name;
+    el.querySelector('.filename').textContent = entry.file.name;   // 图片下方的小字标签(缩略图画面内已叠有文件名)
     el.addEventListener('click', () => {
       if (i === currentIdx) return;
       setActivePhoto(i);
@@ -778,6 +785,14 @@ async function exportCurrent() {
   }
 }
 
+// 文件名附加当前日期时间,如 260918230112(YYMMDDHHMMSS)
+function timestamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return String(d.getFullYear()).slice(-2) + p(d.getMonth() + 1) + p(d.getDate()) +
+         p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
 // 触发浏览器下载一个 Blob
 function downloadBlob(blob, name) {
   const a = document.createElement('a');
@@ -830,7 +845,7 @@ async function exportAllZip() {
     }
     const zip = await buildZip(jpegs);
     if (!zip) throw new Error('ZIP 打包失败');
-    downloadBlob(zip, 'RAW 导出.zip');
+    downloadBlob(zip, 'RAW 导出 ' + timestamp() + '.zip');
     pill.textContent = '完成 ' + jpegs.length + ' 张';
     setBadge('已导出 ' + jpegs.length + ' 张', 'ok');
     setTimeout(() => pill.remove(), 2000);
@@ -844,7 +859,10 @@ async function exportAllZip() {
   }
 }
 
-// 把所有 JPEG 打包为一个 ZIP 压缩包(用 Canvas 得到的 Blob 构建,不依赖第三方库)
+// 把所有 JPEG 打包为一个 ZIP 压缩包(用 Canvas 得到的 Blob 构建,不依赖第三方库)。
+// 打包规格:local file header 后紧跟文件数据(不打“数据描述符”,压缩方法用 store);
+// 文件名一律 UTF-8 并在通用标志置 UTF-8 位,以便中文名被各解压工具正确识别。
+// 文件数超过 65535 或总大小超过 4 GiB 时追加 ZIP64 EOCD,保证大目录也能被解压。
 async function buildZip(files) {
   const encoder = new TextEncoder();
   // 经典 CRC-32
@@ -864,24 +882,40 @@ async function buildZip(files) {
   };
   const u16 = (arr, o, v) => { arr[o] = v & 255; arr[o + 1] = (v >>> 8) & 255; };
   const u32 = (arr, o, v) => { arr[o] = v & 255; arr[o + 1] = (v >>> 8) & 255; arr[o + 2] = (v >>> 16) & 255; arr[o + 3] = (v >>> 24) & 255; };
+  // 1990 年初作为默认日期(纯 store 打包,解压方不关心该时间)
+  const d = new Date(1990, 0, 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+
+  // 生成一个安全的 zip 内条目名:去目录分隔、前缀下划线防止以点开头被当作隐藏文件
+  function safeName(n) {
+    let s = String(n).replace(/\\/g, '/').replace(/^.*\//, '');
+    if (!s || s.startsWith('.')) s = '_' + s;
+    return s;
+  }
 
   const parts = [];
   let offset = 0;
   const central = [];
+  let totalSize = 0;
   for (const f of files) {
-    const name = encoder.encode(f.name);
+    const name = encoder.encode(safeName(f.name));
     const data = new Uint8Array(await f.blob.arrayBuffer());
     const crc = crc32(data, 0, data.length);
+    totalSize += data.length;
 
     const lh = new Uint8Array(30 + name.length);   // 本地文件头
     u32(lh, 0, 0x04034b50);
     u16(lh, 4, 20);            // 版本
-    u16(lh, 6, 0x0800);        // 通用标志:UTF-8 文件名
+    u16(lh, 6, 0x0800);        // 通用标志:UTF-8 文件名(无数据描述符)
     u16(lh, 8, 0);             // 压缩方法:存储(不压缩)
+    u16(lh, 10, dosTime);
+    u16(lh, 12, dosDate);
     u32(lh, 14, crc);
     u32(lh, 18, data.length);  // 压缩后大小
     u32(lh, 22, data.length);  // 未压缩大小
     u16(lh, 26, name.length);
+    u16(lh, 28, 0);            // 文件名长度 + 额外字段长度均为 0
     lh.set(name, 30);
     parts.push(lh, data);
 
@@ -890,23 +924,64 @@ async function buildZip(files) {
     u16(ch, 4, 20); u16(ch, 6, 20);
     u16(ch, 8, 0x0800);
     u16(ch, 10, 0);
+    u16(ch, 12, dosTime);
+    u16(ch, 14, dosDate);
     u32(ch, 16, crc);
     u32(ch, 20, data.length);
     u32(ch, 24, data.length);
     u16(ch, 28, name.length);
+    u16(ch, 30, 0);            // 额外字段长度
+    u16(ch, 32, 0);            // 注释长度
+    u16(ch, 34, 0);            // 磁盘号
+    u16(ch, 36, 0);            // 内部属性
+    u32(ch, 38, 0);            // 外部属性(普通文件)
     u32(ch, 42, offset);
     ch.set(name, 46);
     central.push(ch);
     offset += 30 + name.length + data.length;
   }
+  const centralSize = central.reduce((a, c) => a + c.length, 0);
+  const needZip64 = central.length > 0xffff || offset > 0xffffffff;
+
   // 中央目录结束记录
   const eocd = new Uint8Array(22);
   u32(eocd, 0, 0x06054b50);
+  u16(eocd, 4, 0);             // 磁盘号
+  u16(eocd, 6, 0);             // 起始磁盘号
   u16(eocd, 8, central.length);
   u16(eocd, 10, central.length);
-  u32(eocd, 12, central.reduce((a, c) => a + c.length, 0));
+  u32(eocd, 12, centralSize);
   u32(eocd, 16, offset);
-  parts.push(central, eocd);
+  if (needZip64) {
+    // 放不下时用占位值(0xffff / 0xffffffff),真实值写入 ZIP64 EOCD
+    u16(eocd, 8, 0xffff); u16(eocd, 10, 0xffff);
+    u32(eocd, 12, 0xffffffff); u32(eocd, 16, 0xffffffff);
+  }
+  // 中央目录记录逐条推入 parts(不能把数组整体作为 BlobPart,否则会被 toString 成文本)
+  for (const c of central) parts.push(c);
+  if (needZip64) {
+    // ZIP64 扩展记录(固定 56 字节),紧跟 EOCD 之前
+    const z64 = new Uint8Array(56);
+    u32(z64, 0, 0x06064b50);
+    u32(z64, 4, 44);           // 记录大小(后续 44 字节)
+    u32(z64, 8, 45);           // 版本
+    u32(z64, 12, 45);
+    u32(z64, 16, 0);           // 磁盘数
+    u32(z64, 20, 0);
+    u32(z64, 24, central.length);
+    u32(z64, 28, central.length);
+    u32(z64, 32, centralSize);
+    u32(z64, 40, offset);
+    u32(z64, 48, 1);           // 可定位记录数
+    parts.push(z64);
+    const loc = new Uint8Array(20);   // ZIP64 定位记录
+    u32(loc, 0, 0x07064b50);
+    u32(loc, 4, 0);
+    u32(loc, 8, offset + centralSize);
+    u32(loc, 12, 1);
+    parts.push(loc);
+  }
+  parts.push(eocd);
   return new Blob(parts, { type: 'application/zip' });
 }
 

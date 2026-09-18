@@ -305,7 +305,9 @@
     overflow: hidden; background: var(--panel); cursor: pointer;
     text-align: left;
   }
-  .thumb img { width: 100%; height: 88px; object-fit: cover; display: block; }
+  .thumb:hover { border-color: var(--faint); }
+  .thumb.on { border-color: var(--accent); }
+  .thumb img { width: 100%; height: 176px; object-fit: cover; display: block; }
   .thumb .filename {
     display: block; font-size: 10px; line-height: 1.5;
     color: var(--text); padding: 3px 6px;
@@ -319,7 +321,6 @@
     transition: opacity .15s;
   }
   .thumb:hover .remove { opacity: 1; }
-  .thumb.on { border-color: var(--accent); }
 
   /* 导出下拉菜单 */
   .menu-wrap { position: relative; }
@@ -390,6 +391,7 @@
     }
     #thumbs { flex-direction: row; overflow-y: hidden; overflow-x: auto; }
     .thumb { width: 96px; flex: 0 0 96px; }
+    .thumb img { height: 96px; }
   }
 
   /* “正在解码”时的引擎徽标高亮 */
