@@ -50,6 +50,12 @@ let channelGains = { r: 1, g: 1, b: 1 };
 let histVisible = false;
 let queue = 0;
 
+// 批量导入的照片列表
+let photoList = [];        // [{ file, doc, thumbUrl }]
+let currentIdx = -1;       // 当前选中下标
+let exportQueue = [];      // 批量导出任务队列
+let exporting = false;
+
 // 渲染缓存
 let renderCanvas = null;    // 高分辨率离屏
 let renderCtx = null;
@@ -328,11 +334,12 @@ function rebuildLuts(opts) {
 }
 
 // 深度渲染:doc.src(整分辨率 8 位) -> out(Uint8Array)
-function renderFrame(doc, opts, out) {
+// extraGains 可选:批量导出时传入导出的通道增益,默认用全局 channelGains
+function renderFrame(doc, opts, out, extraGains) {
   const { w, h, src } = doc;
   rebuildLuts(opts);
   const satF = opts.sat / 100;
-  const g = channelGains;
+  const g = extraGains || channelGains;
   const rg = g.r, gg = g.g, bg = g.b;
   const useGain = rg !== 1 || gg !== 1 || bg !== 1;
 
@@ -609,9 +616,219 @@ function togglePanel(id, btnId) {
   side.classList.toggle('open', anyVisible);
 }
 
-// ===================================================================
-// 打开文件
-// ===================================================================
+// ---------- 批量导入与导出 ----------
+const thumbsEl = val('thumbs');
+
+// 缩略图使用内嵌预览(优先),没有则用解码结果生成小图
+async function makeThumb(entry) {
+  try {
+    const t = entry.doc && entry.doc.raw ? await entry.doc.raw.thumbnailData() : null;
+    if (t && t.data && t.data.length) {
+      const type = t.format === 'jpeg' ? 'image/jpeg' : 'image/png';
+      return URL.createObjectURL(new Blob([t.data], { type }));
+    }
+  } catch (_) {}
+  try {
+    const c = document.createElement('canvas');
+    const w = entry.doc.w, h = entry.doc.h;
+    const scale = 96 / Math.max(w, h);
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    const ctx = c.getContext('2d');
+    const img = new ImageData(new Uint8ClampedArray(entry.doc.src.buffer, 0, w * h * 4), w, h);
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL('image/jpeg', 0.7);
+  } catch (_) {
+    return '';
+  }
+}
+
+function updateThumbBar() {
+  thumbsEl.innerHTML = '';
+  photoList.forEach((entry, i) => {
+    const el = document.createElement('button');
+    el.className = 'thumb' + (i === currentIdx ? ' on' : '');
+    el.title = entry.file.name;
+    el.innerHTML = `<img alt="" src="${entry.thumbUrl}"><span class="filename"></span><span class="mark">✓</span>`;
+    el.querySelector('.filename').textContent = entry.file.name;
+    el.addEventListener('click', () => {
+      if (i === currentIdx) return;
+      setActivePhoto(i);
+    });
+    const rm = document.createElement('button');
+    rm.className = 'remove';
+    rm.textContent = '×';
+    rm.title = '从列表移除';
+    rm.addEventListener('click', ev => {
+      ev.stopPropagation();
+      removePhoto(i);
+    });
+    el.appendChild(rm);
+    thumbsEl.appendChild(el);
+  });
+  val('btnExportAll').disabled = photoList.length === 0;
+}
+
+function setActivePhoto(idx) {
+  const entry = photoList[idx];
+  if (!entry || idx === currentIdx) return;
+  if (cur && cur.raw) { try { cur.raw.dispose(); } catch (_) {} }
+  cur = entry.doc;
+  currentIdx = idx;
+  thumbCache = null;
+  // 归位滑块与显示参数
+  for (const k in SLIDERS) val(SLIDERS[k].input).value = SLIDERS[k].preset;
+  channelGains = { r: 1, g: 1, b: 1 };
+  lutState = { ev: null, br: null, hi: null, sh: null, ct: null };
+  currentWbLabel = '相机';
+  updateSliderDisplays();
+  document.querySelectorAll('#wbChips .chip').forEach(c => c.classList.toggle('on', c.dataset.wb === 'camera'));
+  ensureRenderCanvas(cur.w, cur.h);
+  render();
+  showMetaPanel(); showMapPanel();
+  fileInfoEl.textContent = `${entry.file.name} · ${fmtBytes(entry.file.size)} · ${cur.w}×${cur.h}`;
+  if (cur.linearDng) fileInfoEl.textContent += ' · 内嵌全尺寸 JPEG';
+  setBadge('就绪', 'ok');
+  updateThumbBar();
+}
+
+// 批量导入:files 可多选/追加;mode 为 'replace' 或 'append'
+async function importFiles(files, mode) {
+  if (!files || !files.length) return;
+  const arr = Array.from(files);
+  hint.style.display = 'none';
+  if (mode === 'replace') {
+    // 清空旧列表与旧预览资源
+    for (const e of photoList) { if (e.thumbUrl) URL.revokeObjectURL(e.thumbUrl); if (e.doc && e.doc.raw) { try { e.doc.raw.dispose(); } catch (_) {} } }
+    photoList = []; currentIdx = -1;
+    if (cur) { cur = null; renderCanvas = null; renderCtx = null; currentOut = null; }
+    thumbsEl.innerHTML = '';
+  }
+  setBadge('导入中…', '');
+  const total = arr.length;
+  const firstIdx = mode === 'replace' ? 0 : photoList.length;
+  for (let i = 0; i < total; i++) {
+    const f = arr[i];
+    setBusy(true, `正在解析 ${i + 1}/${total}…`, f.name);
+    await new Promise(r => setTimeout(r, 20));
+    try {
+      const doc = await decodeFile(f, currentEngine);
+      const entry = { file: f, doc, thumbUrl: '' };
+      photoList.push(entry);
+      const t = await makeThumb(entry);   // 内嵌预览解码串行,先生成占位再填充
+      entry.thumbUrl = t;
+      updateThumbBar();
+    } catch (e) {
+      console.error('导入失败', f.name, e);
+      setBadge('导入失败: ' + (e && e.message || e), 'err');
+    }
+  }
+  progressEl.classList.remove('show');
+  setBusy(false);
+  if (mode === 'append') {
+    // 追加导入:保留当前选中照片
+    if (currentIdx < 0 && photoList.length) setActivePhoto(0);
+  } else if (photoList.length) {
+    // 重新导入:默认选中第一张
+    setActivePhoto(0);
+  }
+  if (photoList.length) { updateThumbBar(); setBadge(`已导入 ${photoList.length} 张`, 'ok'); }
+}
+
+function removePhoto(i) {
+  const e = photoList[i];
+  if (e.thumbUrl) URL.revokeObjectURL(e.thumbUrl);
+  if (e.doc && e.doc.raw) { try { e.doc.raw.dispose(); } catch (_) {} }
+  photoList.splice(i, 1);
+  if (currentIdx === i) {
+    currentIdx = -1;
+    const next = photoList[i] ? i : i - 1;
+    if (next >= 0) setActivePhoto(next);
+    else {
+      // 列表已清空,回到初始提示态
+      cur = null; renderCanvas = null; renderCtx = null; currentOut = null;
+      hint.style.display = 'block';
+      setBadge('', '');
+      fileInfoEl.textContent = '';
+      coordsEl.textContent = '';
+      renderTimeEl.textContent = '';
+      zoomInfoEl.textContent = '100%';
+      updateThumbBar();
+    }
+  } else if (currentIdx > i) {
+    currentIdx--;
+  }
+  updateThumbBar();
+}
+
+// 导出当前渲染结果
+function exportCanvasToJpeg(canvas, name) {
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, 'image/jpeg', 0.92);
+}
+
+// 以某张照片为基础渲染离屏画布(复用当前调整参数,仅供批量导出)
+function renderForExport(doc, opts) {
+  const c = document.createElement('canvas');
+  c.width = doc.w; c.height = doc.h;
+  const ctx = c.getContext('2d');
+  const W = doc.w, H = doc.h;
+  const out = new Uint8Array(W * H * 4);
+  // renderFrame 支持覆盖通道增益(自定义白平衡实时调整),供批量导出应用
+  renderFrame(doc, opts, out, opts._gains);
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(out.buffer, 0, out.length), W, H), 0, 0);
+  return c;
+}
+
+// 批量导出已选照片(默认全部;未选中时取全部)
+function exportAll() {
+  if (!photoList.length) return;
+  if (exportQueue.length) return;   // 已在进行
+  // 当前“调整”面板参数将应用于所有照片
+  const curOpts = { ...readSliders() };
+  curOpts._gains = { ...channelGains };
+  exportQueue = photoList.map((e, i) => ({ i, e, opts: curOpts }));
+  exporting = true;
+  const pill = document.createElement('span');
+  pill.className = 'progress-pill show';
+  pill.id = 'batchPill';
+  pill.textContent = '导出中…';
+  document.querySelector('header').appendChild(pill);
+  pumpExport();
+}
+
+function pumpExport() {
+  if (!exportQueue.length) {
+    exporting = false;
+    const pill = val('batchPill');
+    if (pill) { pill.textContent = '完成 ' + (photoList.length || 0) + ' 张'; setTimeout(() => pill.remove(), 2000); }
+    return;
+  }
+  const { i, e, opts } = exportQueue.shift();
+  setBusy(true, `正在导出 ${photoList.length - exportQueue.length}/${photoList.length}…`, e.file.name);
+  const pill = val('batchPill');
+  if (pill) pill.textContent = `导出中 ${photoList.length - exportQueue.length}/${photoList.length}`;
+  // 每个任务等待一帧,避免一次性画大量画布导致界面卡死
+  setTimeout(() => {
+    try {
+      const c = renderForExport(e.doc, opts);
+      const base = e.file.name.replace(/\.[^.]+$/, '');
+      exportCanvasToJpeg(c, base + '.jpg');
+      c.width = 0; c.height = 0;
+    } catch (err) {
+      console.error('导出失败', e.file.name, err);
+      setBadge('导出失败: ' + (err && err.message || err), 'err');
+    }
+    pumpExport();
+  }, 60);
+}
+
+// ---------- 打开文件(单图/批量) ----------
 async function openFile(file, engineKey) {
   if (!file) return;
   curFile = file;
@@ -659,9 +876,15 @@ async function openFile(file, engineKey) {
 // ===================================================================
 btn('btnOpen').addEventListener('click', () => val('file').click());
 val('file').addEventListener('change', e => {
-  const f = e.target.files[0];
+  const files = Array.from(e.target.files || []);
   e.target.value = '';
-  if (f) openFile(f, currentEngine);
+  if (files.length) importFiles(files, 'replace');
+});
+btn('btnOpenMore').addEventListener('click', () => val('fileMore').click());
+val('fileMore').addEventListener('change', e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (files.length) importFiles(files, 'append');
 });
 
 // 拖放
@@ -676,8 +899,8 @@ window.addEventListener('dragleave', e => {
 });
 window.addEventListener('drop', e => {
   e.preventDefault(); dropDepth = 0; val('content').classList.remove('drop');
-  const f = e.dataTransfer.files[0];
-  if (f) openFile(f, currentEngine);
+  const files = Array.from(e.dataTransfer.files || []);
+  if (files.length) importFiles(files, 'replace');
 });
 
 // 窗口尺寸
@@ -837,18 +1060,11 @@ function highlightEngine(key) {
 // 导出
 btn('btnExport').addEventListener('click', () => {
   if (!renderCanvas) return;
-  const scale = 1;   // 渲染结果本身已含所有调整,原尺寸导出即可
-  const ex = document.createElement('canvas');
-  ex.width = renderCanvas.width; ex.height = renderCanvas.height;
-  ex.getContext('2d').drawImage(renderCanvas, 0, 0);
-  ex.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = ((curFile && curFile.name || 'raw').replace(/\.[^.]+$/, '')) + '.jpg';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-  }, 'image/jpeg', 0.92);
+  exportCanvasToJpeg(renderCanvas, ((curFile && curFile.name || 'raw').replace(/\.[^.]+$/, '')) + '.jpg');
 });
+
+// 批量导出
+btn('btnExportAll').addEventListener('click', () => exportAll());
 
 // 内嵌预览图
 let thumbCache = null;   // 缓存 {data, format},避免同一实例重复解包

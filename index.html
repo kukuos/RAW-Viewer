@@ -276,6 +276,51 @@
   }
   #pixel b { font-family: var(--mono); color: var(--accent); font-weight: 600; }
 
+  /* 缩略图栏 */
+  #thumbs {
+    display: flex; gap: 8px; flex-wrap: nowrap; overflow-x: auto;
+    padding: 8px 12px; flex: 0 0 auto;
+    background: var(--bg2); border-top: 1px solid var(--border);
+  }
+  #thumbs:empty { display: none; }
+  .thumb {
+    position: relative; flex: 0 0 auto;
+    width: 64px; height: 64px; padding: 0;
+    border: 2px solid var(--border); border-radius: 8px;
+    overflow: hidden; background: var(--panel);
+  }
+  #thumbs .thumb { cursor: pointer; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .filename {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    font-size: 9.5px; line-height: 1.4; color: #fff;
+    background: rgba(0,0,0,.72); padding: 1px 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-align: left;
+  }
+  .thumb .remove {
+    position: absolute; top: -16px; right: -16px;
+    width: 16px; height: 16px; line-height: 14px; text-align: center;
+    background: var(--red); color: #fff; border: none; border-radius: 4px;
+    font-size: 11px; cursor: pointer; opacity: 0;
+    transition: opacity .15s;
+  }
+  .thumb:hover .remove { opacity: 1; top: 2px; right: 2px; }
+  .thumb.on { border-color: var(--accent); }
+  .thumb .mark {
+    position: absolute; top: 3px; left: 3px;
+    width: 17px; height: 17px; border-radius: 50%;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; line-height: 17px;
+    text-align: center; display: none;
+  }
+  .thumb.export-on .mark { display: block; background: var(--accent2); }
+  .progress-pill {
+    font-size: 11.5px; color: var(--dim);
+    padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px;
+    margin-left: auto; display: none;
+  }
+  .progress-pill.show { display: inline-flex; }
+
   /* 底部状态条 */
   #statusbar {
     flex: 0 0 auto;
@@ -328,7 +373,9 @@
   <div class="brand"><span class="dot"></span>RAW 文件查看助手 <small>LibRaw-WASM</small></div>
 
   <button id="btnOpen" title="选择 RAW 文件"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14" opacity=".55"/></svg>打开 RAW…</button>
-  <input type="file" id="file" accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
+  <button id="btnOpenMore" title="在当前列表中追加导入更多文件">＋ 追加</button>
+  <input type="file" id="file" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
+  <input type="file" id="fileMore" multiple accept=".cr2,.cr3,.nef,.nrw,.arw,.srf,.sr2,.raf,.rw2,.orf,.pef,.dng,.raw,.iiq,.3fr,.kdc,.dcr,.mrw,.erf,.mef,.x3f,.gpr,.srw,.bay,.dng,.fff,.mos,.ptx,.rwl,.srw,.x3f">
 
   <button id="btnZoomIn" title="放大 (Ctrl++)">＋</button>
   <button id="btnZoomOut" title="缩小 (Ctrl+-)">－</button>
@@ -345,6 +392,7 @@
 
   <span class="sep"></span>
   <button id="btnExport" title="导出当前渲染参数的 JPEG">⬇ 导出</button>
+  <button id="btnExportAll" title="导出所有已导入照片" disabled>⬇ 批量导出</button>
   <button id="btnThumb" title="提取内嵌预览图">🖼 预览图</button>
 
   <button id="btnTheme" title="切换白天 / 黑夜外观">🌙</button>
@@ -452,6 +500,8 @@
       </div>
       </aside>
 </main>
+
+<div id="thumbs" title="已导入照片,点击缩略图切换查看"></div>
 
 <footer id="statusbar">
   <span id="fileInfo"></span>
